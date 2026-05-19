@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AquaSense IoT Dashboard</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    *{
+      margin:0;
+      padding:0;
+      box-sizing:border-box;
+      font-family:Arial, sans-serif;
+    }
+
+    body{
+      background:#0b0f1a;
+      color:white;
+      min-height:100vh;
+      padding:20px;
+    }
+
+    h1{
+      text-align:center;
+      margin-bottom:25px;
+      font-size:32px;
+    }
+
+    .grid{
+      display:grid;
+      grid-template-columns:repeat(auto-fit,minmax(250px,1fr));
+      gap:20px;
+      margin-bottom:20px;
+    }
+
+    .card{
+      background:rgba(255,255,255,0.05);
+      border:1px solid rgba(255,255,255,0.1);
+      border-radius:20px;
+      padding:20px;
+      backdrop-filter:blur(10px);
+      box-shadow:0 0 20px rgba(0,0,0,0.4);
+    }
+
+    .card h2{
+      font-size:18px;
+      margin-bottom:10px;
+      color:#00d9ff;
+    }
+
+    .value{
+      font-size:40px;
+      font-weight:bold;
+    }
+
+    .status{
+      margin-top:10px;
+      padding:10px;
+      border-radius:10px;
+      text-align:center;
+      font-weight:bold;
+    }
+
+    .good{
+      background:#00c853;
+    }
+
+    .warning{
+      background:#ff9800;
+    }
+
+    .danger{
+      background:#f44336;
+    }
+
+    button{
+      width:100%;
+      padding:15px;
+      border:none;
+      border-radius:15px;
+      background:#00d9ff;
+      color:black;
+      font-weight:bold;
+      font-size:16px;
+      cursor:pointer;
+      transition:0.3s;
+    }
+
+    button:hover{
+      transform:scale(1.03);
+    }
+
+    canvas{
+      background:#111827;
+      border-radius:20px;
+      padding:10px;
+    }
+
+    .terminal{
+      background:black;
+      color:#00ff88;
+      height:250px;
+      overflow:auto;
+      padding:15px;
+      border-radius:20px;
+      font-family:monospace;
+      margin-top:20px;
+    }
+
+    .device{
+      margin-top:10px;
+      color:#aaa;
+      text-align:center;
+    }
+
+  </style>
+</head>
+<body>
+
+  <h1>💧 AquaSense IoT Dashboard</h1>
+
+  <div class="grid">
+
+    <div class="card">
+      <h2>pH Sensor</h2>
+      <div class="value" id="phValue">0.0</div>
+    </div>
+
+    <div class="card">
+      <h2>TDS Sensor</h2>
+      <div class="value" id="tdsValue">0 ppm</div>
+    </div>
+
+    <div class="card">
+      <h2>Temperature</h2>
+      <div class="value" id="tempValue">0°C</div>
+    </div>
+
+  </div>
+
+  <div class="card">
+    <h2>Water Status</h2>
+
+    <div class="status warning" id="waterStatus">
+      WAITING DATA
+    </div>
+
+    <br>
+
+    <button onclick="connectMicrobit()">
+      Connect Micro:bit
+    </button>
+
+    <div class="device" id="deviceName">
+      Not Connected
+    </div>
+
+  </div>
+
+  <br>
+
+  <div class="card">
+    <h2>Realtime Graph</h2>
+    <canvas id="sensorChart"></canvas>
+  </div>
+
+  <div class="terminal" id="terminal">
+[SYSTEM READY]
+Waiting Micro:bit connection...
+  </div>
+
+<script>
+
+const UART_SERVICE_UUID =
+'6e400001-b5a3-f393-e0a9-e50e24dcca9e'
+
+const UART_RX_UUID =
+'6e400003-b5a3-f393-e0a9-e50e24dcca9e'
+
+let chart
+
+const terminal = document.getElementById('terminal')
+
+function addLog(text){
+  terminal.innerHTML =
+  text + "<br>" + terminal.innerHTML
+}
+
+const ctx =
+document.getElementById('sensorChart')
+
+chart = new Chart(ctx, {
+  type:'line',
+  data:{
+    labels:[],
+    datasets:[
+      {
+        label:'pH',
+        data:[],
+      },
+      {
+        label:'TDS',
+        data:[],
+      },
+      {
+        label:'TEMP',
+        data:[],
+      }
+    ]
+  },
+  options:{
+    responsive:true
+  }
+})
+
+async function connectMicrobit(){
+
+  if(!navigator.bluetooth){
+    alert("Web Bluetooth tidak support di browser ini")
+    return
+  }
+
+  try{
+
+    addLog('[SCANNING DEVICE]')
+
+    const device =
+    await navigator.bluetooth.requestDevice({
+      filters:[
+        { namePrefix:'BBC micro:bit' }
+      ],
+      optionalServices:[
+        UART_SERVICE_UUID
+      ]
+    })
+
+    document.getElementById('deviceName')
+    .innerText = device.name
+
+    addLog('[CONNECTED] ' + device.name)
+
+    const server =
+    await device.gatt.connect()
+
+    const service =
+    await server.getPrimaryService(
+      UART_SERVICE_UUID
+    )
+
+    const characteristic =
+    await service.getCharacteristic(
+      UART_RX_UUID
+    )
+
+    await characteristic.startNotifications()
+
+    characteristic.addEventListener(
+      'characteristicvaluechanged',
+      handleData
+    )
+
+  }catch(error){
+
+    console.log(error)
+
+    addLog('[ERROR] ' + error)
+
+  }
+
+}
+
+function handleData(event){
+
+  const value =
+  new TextDecoder().decode(
+    event.target.value
+  )
+
+  addLog(value)
+
+  parseSensorData(value)
+
+}
+
+function parseSensorData(data){
+
+  try{
+
+    const phMatch =
+    data.match(/PH:(\d+\.?\d*)/)
+
+    const tdsMatch =
+    data.match(/TDS:(\d+)/)
+
+    const tempMatch =
+    data.match(/TEMP:(\d+)/)
+
+    if(!phMatch || !tdsMatch || !tempMatch)
+      return
+
+    const ph = parseFloat(phMatch[1])
+    const tds = parseInt(tdsMatch[1])
+    const temp = parseInt(tempMatch[1])
+
+    document.getElementById('phValue')
+    .innerText = ph
+
+    document.getElementById('tdsValue')
+    .innerText = tds + ' ppm'
+
+    document.getElementById('tempValue')
+    .innerText = temp + '°C'
+
+    updateStatus(ph, tds)
+
+    updateChart(ph, tds, temp)
+
+  }catch(err){
+
+    console.log(err)
+
+  }
+
+}
+
+function updateStatus(ph, tds){
+
+  const status =
+  document.getElementById('waterStatus')
+
+  if(ph >= 6.5 && ph <= 8 && tds < 500){
+
+    status.innerText = '✅ GOOD'
+    status.className = 'status good'
+
+  }
+  else if(tds >= 500 && tds <= 1000){
+
+    status.innerText = '⚠ WARNING'
+    status.className = 'status warning'
+
+  }
+  else{
+
+    status.innerText = '❌ DANGEROUS'
+    status.className = 'status danger'
+
+  }
+
+}
+
+function updateChart(ph, tds, temp){
+
+  const time =
+  new Date().toLocaleTimeString()
+
+  chart.data.labels.push(time)
+
+  chart.data.datasets[0].data.push(ph)
+  chart.data.datasets[1].data.push(tds)
+  chart.data.datasets[2].data.push(temp)
+
+  if(chart.data.labels.length > 10){
+
+    chart.data.labels.shift()
+
+    chart.data.datasets.forEach(dataset=>{
+      dataset.data.shift()
+    })
+
+  }
+
+  chart.update()
+
+}
+
+</script>
+
+</body>
+</html>
